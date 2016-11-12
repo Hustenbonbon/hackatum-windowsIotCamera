@@ -1,22 +1,28 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Net.Http;
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Security.Cryptography;
 using Windows.ApplicationModel.Background;
 using Windows.Media.Capture;
 using Windows.Media.MediaProperties;
-
 
 using GrovePi;
 using GrovePi.Sensors;
 
 using System.Threading;
+using System.Threading.Tasks;
+using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using Windows.UI.ViewManagement;
 using Windows.UI.Xaml;
+using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Media.Imaging;
 
 // The Background Application template is documented at http://go.microsoft.com/fwlink/?LinkID=533884&clcid=0x409
@@ -28,8 +34,7 @@ namespace CameraApp
         enum State
         {
             ULTRASONIC,
-            PICTURE,
-            WAITING_FOR_RESPONSE
+            PICTURE
         }
 
         private State myState = State.ULTRASONIC;
@@ -38,11 +43,9 @@ namespace CameraApp
 
         private StorageFile photoFile;
 
-        private const string PHOTO_FILE_NAME = "photo.jpg";
-
         private Timer peroidicTimer;
         private Timer cameraTimer;
-        private String SGroveUltrasonicSensor;
+        private String _sGroveUltrasonicSensor;
         IUltrasonicRangerSensor GroveRanger = DeviceFactory.Build.UltraSonicSensor(Pin.DigitalPin4);
         private ILed led = DeviceFactory.Build.Led(Pin.DigitalPin2);
 
@@ -50,57 +53,53 @@ namespace CameraApp
         private int counter = 0;
         private bool isPictureInited = false;
 
+        
+
         public void Run(IBackgroundTaskInstance taskInstance)
         {
+
             InitPicture();
-            peroidicTimer = new Timer(this.TimerCallBack, null, 0, 100);
-            cameraTimer = null;
-            //
-            // If you start any asynchronous methods here, prevent the task
-            // from closing prematurely by using BackgroundTaskDeferral as
-            // described in http://aka.ms/backgroundtaskdeferral
-            //
+            peroidicTimer = new Timer(this.UltraSonicCheck, null, 0, 500);
             BackgroundTaskDeferral deferral = taskInstance.GetDeferral();
-        }
-        private void TimerCallBack(object state)
-        {
-            UltraSonicCheck();
+
+
+
         }
 
-        private void UltraSonicCheck()
+        private void UltraSonicCheck(object sender)
         {
+
+            if (myState == State.PICTURE)
+            {
+                return;
+            }
             try
             {
-                counter++;
                 var tmp = GroveRanger.MeasureInCentimeters();
                 buffer.AddNewValue(tmp);
-                SGroveUltrasonicSensor = "Distance: " + tmp.ToString() + "cm";
-                if (counter % 10 == 0)
-                {
-                    Debug.WriteLine(SGroveUltrasonicSensor + " Median: " + buffer.GetMedian() + " cm");
-                }
-                counter %= 100;
-                if (buffer.GetMedian() < 20)
+
+                if (buffer.GetMedian() < 20 && cameraTimer == null)
                 {
                     led.ChangeState(SensorStatus.On);
                     myState = State.PICTURE;
-                    cameraTimer = new Timer(this.PictureTaker, null, 0, 1000);
+                    Debug.WriteLine("Start taking pictures");
+                    PictureTaker();
+                    //cameraTimer = new Timer(this.PictureTaker, null, 0, 1000);
                 }
                 else
                 {
                     led.ChangeState(SensorStatus.Off);
-                    cameraTimer = null;
+                    //cameraTimer = null;
                     myState = State.ULTRASONIC;
                 }
             }
-            catch (Exception /*ex*/)
+            catch
             {
-
+                Debug.WriteLine("Error");
             }
-            
         }
 
-        void PictureTaker(object state)
+        void PictureTaker()
         {
             if (isPictureInited)
             {
@@ -117,17 +116,63 @@ namespace CameraApp
             try
             {
 
-                photoFile = await KnownFolders.PicturesLibrary.CreateFileAsync(
-                    PHOTO_FILE_NAME, CreationCollisionOption.GenerateUniqueName);
+                //photoFile = await KnownFolders.PicturesLibrary.CreateFileAsync(
+                //    PHOTO_FILE_NAME, CreationCollisionOption.GenerateUniqueName);
+                //Debug.WriteLine("Photo File: " + photoFile);
                 ImageEncodingProperties imageProperties = ImageEncodingProperties.CreateJpeg();
-                await mediaCapture.CapturePhotoToStorageFileAsync(imageProperties, photoFile);
-                Debug.WriteLine("Take Photo succeeded: " + photoFile.Path);
-                
+                Debug.WriteLine("Image Properties: " + imageProperties);
+                IRandomAccessStream photoStream = new InMemoryRandomAccessStream();
+                if (mediaCapture != null)
+                {
+                    await mediaCapture.CapturePhotoToStreamAsync(imageProperties, photoStream);
+                }
+                else
+                {
+
+                    Debug.WriteLine("ERROOR" + mediaCapture);
+                }
+
+                //WriteableBitmap bmp = new WriteableBitmap(300,169);
+
+
+                //Debug.WriteLine("Bitmap Start" + bmp);
+
+                //bmp.SetSource(photoStream);
+                Debug.WriteLine("Sending picture");
+                byte[] byteArray = await Convert(photoStream);
+
+                HttpClient client = new HttpClient();
+                MultipartFormDataContent form = new MultipartFormDataContent();
+
+                form.Add(new ByteArrayContent(byteArray, 0, byteArray.Length), "file", "file");
+                HttpResponseMessage response = await client.PostAsync("http://192.168.0.113:5000/faces/verify", form);
+                response.EnsureSuccessStatusCode();
+                client.Dispose();
+                Debug.WriteLine(response.StatusCode + " " +response.Content);
+
+
+                Debug.WriteLine("Take Photo succeeded: " + photoStream.Size);
+                myState = State.ULTRASONIC;
+
+            }
+            catch (HttpRequestException re)
+            {
+                Debug.WriteLine("Wrong response");
             }
             catch (Exception ex)
             {
+                Debug.WriteLine("Taking picture went wrong with message " + ex.StackTrace);
                 Cleanup();
             }
+        }
+
+        async Task<byte[]> Convert(IRandomAccessStream s)
+        {
+            var dr = new DataReader(s.GetInputStreamAt(0));
+            var bytes = new byte[s.Size];
+            await dr.LoadAsync((uint)s.Size);
+            dr.ReadBytes(bytes);
+            return bytes;
         }
 
         async void InitPicture()
