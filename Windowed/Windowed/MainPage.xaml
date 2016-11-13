@@ -1,0 +1,17 @@
+﻿<Page
+    x:Class="Windowed.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Windowed"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <TextBlock x:Name="TemperatureText" HorizontalAlignment="Left" Margin="158,230,0,0" TextWrapping="Wrap" Text="TextBlock" VerticalAlignment="Top"/>
+        <TextBlock x:Name="Humidity_Text" HorizontalAlignment="Left" Margin="158,287,0,0" TextWrapping="Wrap" Text="TextBlock" VerticalAlignment="Top" RenderTransformOrigin="0.459,3.227"/>
+        <TextBlock x:Name="UltraSonicText" HorizontalAlignment="Left" Margin="158,340,0,0" TextWrapping="Wrap" Text="TextBlock" VerticalAlignment="Top" RenderTransformOrigin="0.459,3.227"/>
+        <Image x:Name="image" HorizontalAlignment="Left" Height="217" Margin="83,365,0,0" VerticalAlignment="Top" Width="205" Visibility="Visible"/>
+
+    </Grid>
+</Page>

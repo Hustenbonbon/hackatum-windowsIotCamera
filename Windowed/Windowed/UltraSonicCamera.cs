@@ -1,24 +1,25 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Windows.ApplicationModel.Background;
 using Windows.Media.Capture;
 using Windows.Media.MediaProperties;
-
+using Windows.Storage;
+using Windows.Storage.Streams;
+using Windows.UI.Xaml;
+using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Media.Imaging;
 using GrovePi;
 using GrovePi.Sensors;
 
-using System.Threading;
-using System.Threading.Tasks;
-using Windows.Storage;
-using Windows.Storage.Streams;
-
-// The Background Application template is documented at http://go.microsoft.com/fwlink/?LinkID=533884&clcid=0x409
-
-namespace CameraApp
+namespace Windowed
 {
-    public sealed class StartupTask : IBackgroundTask
+    class UltraSonicCamera
     {
         enum State
         {
@@ -32,45 +33,54 @@ namespace CameraApp
 
         private StorageFile photoFile;
 
-        private Timer peroidicTimer;
-        private Timer cameraTimer;
+        private DispatcherTimer timer;
         private String _sGroveUltrasonicSensor;
         IUltrasonicRangerSensor GroveRanger = DeviceFactory.Build.UltraSonicSensor(Pin.DigitalPin4);
         private ILed led = DeviceFactory.Build.Led(Pin.DigitalPin2);
 
-        CircularBuffer buffer = new CircularBuffer(20);
+        CircularBuffer buffer = new CircularBuffer(10);
         private int counter = 0;
         private bool isPictureInited = false;
+        private bool IsSomeOneCLose = false;
 
-        
+        private MainPage mainPageReference;
 
-        public void Run(IBackgroundTaskInstance taskInstance)
+        public UltraSonicCamera(MainPage mainPageReference)
         {
-
+            this.mainPageReference = mainPageReference;
             InitPicture();
-            DHTConnector dht = new DHTConnector();
-            peroidicTimer = new Timer(this.UltraSonicCheck, null, 0, 500);
-            BackgroundTaskDeferral deferral = taskInstance.GetDeferral();
-
-
-
+            timer = new DispatcherTimer();
+            timer.Interval = TimeSpan.FromSeconds(0.3);
+            timer.Tick += UltraSonicCheck;
+            timer.Start();
         }
 
-        
 
-        private void UltraSonicCheck(object sender)
+
+        private void UltraSonicCheck(object sender,object e)
         {
             try
             {
                 var tmp = GroveRanger.MeasureInCentimeters();
                 buffer.AddNewValue(tmp);
-
-                if (buffer.GetMedian() < 20 && cameraTimer == null)
+                mainPageReference.SetUltraSonicTextView(buffer.GetMedian()+"");
+                if (buffer.GetMedian() < 30)
                 {
                     led.ChangeState(SensorStatus.On);
-                    myState = State.PICTURE;
-                    Debug.WriteLine("Start taking pictures");
-                    PictureTaker();
+                    IsSomeOneCLose = true;
+                    if (isPictureInited)
+                    {
+                        if (myState == State.ULTRASONIC)
+                        {
+                            myState = State.PICTURE;
+                            Debug.WriteLine("Start taking pictures");
+                            takePhoto_Click();
+                        }
+                    }
+                    else
+                    {
+                        Debug.WriteLine("Trying to take picture, but not inited");
+                    }
                     //cameraTimer = new Timer(this.PictureTaker, null, 0, 1000);
                 }
                 else
@@ -79,6 +89,13 @@ namespace CameraApp
                     //cameraTimer = null;
                     myState = State.ULTRASONIC;
                 }
+                if (buffer.GetMedian() > 150 && IsSomeOneCLose && myState == State.ULTRASONIC)
+                {
+                    IsSomeOneCLose = false;
+                    myState = State.PICTURE;
+                    Debug.WriteLine("Taking empty picture");
+                    takePhoto_Click();
+                }
             }
             catch
             {
@@ -86,26 +103,10 @@ namespace CameraApp
             }
         }
 
-        void PictureTaker()
-        {
-            if (isPictureInited)
-            {
-                takePhoto_Click();
-            }
-            else
-            {
-                Debug.WriteLine("Trying to take picture, but not inited");
-            }
-        }
-
         private async void takePhoto_Click()
         {
             try
             {
-
-                //photoFile = await KnownFolders.PicturesLibrary.CreateFileAsync(
-                //    PHOTO_FILE_NAME, CreationCollisionOption.GenerateUniqueName);
-                //Debug.WriteLine("Photo File: " + photoFile);
                 ImageEncodingProperties imageProperties = ImageEncodingProperties.CreateJpeg();
                 Debug.WriteLine("Image Properties: " + imageProperties);
                 IRandomAccessStream photoStream = new InMemoryRandomAccessStream();
@@ -118,25 +119,25 @@ namespace CameraApp
 
                     Debug.WriteLine("ERROOR" + mediaCapture);
                 }
-
-                //WriteableBitmap bmp = new WriteableBitmap(300,169);
-
-
-                //Debug.WriteLine("Bitmap Start" + bmp);
-
-                //bmp.SetSource(photoStream);
                 Debug.WriteLine("Sending picture");
-                byte[] byteArray = await Convert(photoStream);
+                /*
+                BitmapImage bmp = new BitmapImage();
+                bmp.DecodePixelWidth = 1280;
+                bmp.SetSource(photoStream);
+                Image image = mainPageReference.GetPhotoImage();
+                image.Source = bmp;
 
+                /* Wenn Max wieder da ist*/
+                byte[] byteArray = await Convert(photoStream);
                 HttpClient client = new HttpClient();
                 MultipartFormDataContent form = new MultipartFormDataContent();
 
                 form.Add(new ByteArrayContent(byteArray, 0, byteArray.Length), "file", "file");
-                HttpResponseMessage response = await client.PostAsync("http://192.168.0.113:5000/faces/verify", form);
+                HttpResponseMessage response = await client.PostAsync("http://52.166.143.196:9002/faces/verify", form);
                 response.EnsureSuccessStatusCode();
                 client.Dispose();
-                Debug.WriteLine(response.StatusCode + " " +response.Content);
-
+                Debug.WriteLine(response.StatusCode + " " + response.Content);
+                /**/
 
                 Debug.WriteLine("Take Photo succeeded: " + photoStream.Size);
                 myState = State.ULTRASONIC;
@@ -213,13 +214,13 @@ namespace CameraApp
         public void AddNewValue(int newValue)
         {
             values[index] = newValue;
-            index = (index + 1)%values.Length;
+            index = (index + 1) % values.Length;
         }
 
         public int GetMedian()
         {
             int[] temp = values.OrderBy(i => i).ToArray();
-            return temp[temp.Length/2];
+            return temp[temp.Length / 2];
         }
     }
 }
